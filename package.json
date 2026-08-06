@@ -1,0 +1,17 @@
+{
+  "name": "synapse-grid-relay",
+  "version": "1.0.0",
+  "description": "Signaling + WebSocket relay server for Synapse Grid online multiplayer. Matches two phones by room code, exchanges a device-power benchmark to elect the host, and relays game packets between peers through NAT.",
+  "main": "signaling_server.js",
+  "scripts": {
+    "start": "node signaling_server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "MIT",
+  "private": true
+}

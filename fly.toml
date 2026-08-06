@@ -1,0 +1,26 @@
+# Fly.io app config for the Synapse Grid relay.
+# `fly launch` (run from this server/ directory) may offer to generate/overwrite
+# this; keep internal_port = 8080 so it matches the server's default PORT.
+# You must run `fly auth login` and accept Fly's ToS yourself.
+
+app = "synapse-grid-relay"   # change to a unique name; `fly launch` can pick one
+primary_region = "iad"        # pick a region near your players
+
+[build]
+
+[env]
+  PORT = "8080"
+  MAX_ROOM_SIZE = "4"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true    # set false (paid) to keep it always-on, no wake delay
+  auto_start_machines = true
+  min_machines_running = 0     # raise to 1 (paid) for instant first connection
+
+[[http_service.checks]]
+  method = "GET"
+  path = "/health"
+  interval = "30s"
+  timeout = "5s"

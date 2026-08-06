@@ -1,0 +1,16 @@
+# Render Blueprint for the Synapse Grid relay.
+# In Render: New + -> Blueprint -> point at this repo. Render reads this file.
+# You must create/log in to the Render account and accept their ToS yourself.
+services:
+  - type: web
+    name: synapse-grid-relay
+    runtime: node
+    rootDir: server
+    plan: free            # change to "starter" (paid) to avoid free-tier sleep
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    # Render injects PORT automatically; the server reads process.env.PORT.
+    envVars:
+      - key: MAX_ROOM_SIZE
+        value: "4"
