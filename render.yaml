@@ -12,5 +12,12 @@ services:
     healthCheckPath: /health
     # Render injects PORT automatically; the server reads process.env.PORT.
     envVars:
+      # MUST match the client's seat cap. network_manager.gd pins MAX_ENET_PEERS = 12 and clamps
+      # seat_target to 12; signaling_server.js defaults to 12 for the same reason (10 arena + 2
+      # spectator headroom). This env var OVERRIDES that default, so a lower number here does not
+      # shrink the lobby - it lets the client offer seats the relay then refuses with `room_full`,
+      # which surfaces to the player as an unexplained join failure. It sat at "4" and would have
+      # capped every deployed room at 4 while the UI advertised 12. If free-tier capacity ever
+      # forces a smaller room, lower the CLIENT cap in the same change or the two disagree again.
       - key: MAX_ROOM_SIZE
-        value: "4"
+        value: "12"

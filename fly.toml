@@ -10,7 +10,11 @@ primary_region = "iad"        # pick a region near your players
 
 [env]
   PORT = "8080"
-  MAX_ROOM_SIZE = "4"
+  # Must match the client's seat cap (network_manager.gd MAX_ENET_PEERS = 12, seat_target clamped
+  # to 12) and signaling_server.js's own default of 12. This env var overrides that default, so a
+  # smaller value here does not shrink the lobby - the client still offers 12 seats and the relay
+  # rejects the extras with `room_full`. Was "4"; see server/render.yaml for the full rationale.
+  MAX_ROOM_SIZE = "12"
 
 [http_service]
   internal_port = 8080
