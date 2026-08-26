@@ -1,5 +1,11 @@
 # Synapse Grid — Relay / Signaling Server
 
+> **STATUS (2026-08-26):** this relay is an **advanced, off-by-default transport** — deploying it is
+> optional. Direct ENet (the default online path since r13) already hosts up to 12 peers with no relay
+> involved (`network_manager.gd:43`), so serverless internet play works without anything in this folder.
+> Deploy this only if you specifically want relay-hosted rooms (e.g. for a future world-ladder mode).
+> See `docs/MULTIPLAYER_NO_SERVER_PLAN.md` and `docs/UNFINISHED.md` ("Relay redeploy").
+
 A tiny Node.js WebSocket server that makes **internet multiplayer** work for two
 mobile phones that are both behind NAT/CGNAT (i.e. normal phones on normal
 mobile data / home Wi‑Fi). It does two jobs at once:
