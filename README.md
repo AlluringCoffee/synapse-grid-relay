@@ -98,7 +98,7 @@ Environment variables you can set:
 | Var             | Default | Meaning                                   |
 | --------------- | ------- | ----------------------------------------- |
 | `PORT`          | `8080`  | TCP port to listen on                     |
-| `MAX_ROOM_SIZE` | `4`     | Max peers per room (use `2` for strict 1v1)|
+| `MAX_ROOM_SIZE` | `12`     | Max peers per room (use `2` for strict 1v1)|
 
 ---
 
