@@ -129,10 +129,197 @@ function broadcastLobby(room) {
 	for (const p of room.peers.values()) send(p.ws, msg);
 }
 
+// ---- BUG REPORT INTAKE (POST /bug) ---------------------------------------
+// Owner, 2026-09-01: "where does the bug report go ... use bugs@alluring.coffee
+// which would be better and send all data along with it so we can review".
+//
+// WHY IT LIVES HERE AND NOT IN THE GAME. bug_report.gd's own header already
+// states the rule and it has not changed: a credential shipped in a binary is a
+// PUBLISHED credential, so the game can never hold a mail password or an API key.
+// It can only POST to a public endpoint. This is that endpoint, and the key lives
+// in this server's environment where players cannot reach it.
+//
+// CONFIGURE (Render dashboard -> Environment, or `fly secrets set`):
+//   RESEND_API_KEY   the only secret. Without it nothing is emailed - reports are
+//                    still accepted and logged, and the client is told plainly it
+//                    was not delivered so the player keeps their own copy.
+//   BUG_TO           default bugs@alluring.coffee
+//   BUG_FROM         default bugs@alluring.coffee - must be on a domain verified
+//                    with the mail provider or the provider rejects the send.
+// No npm install: Node >= 18 (package.json engines) has global fetch.
+const BUG_TO = process.env.BUG_TO || 'bugs@alluring.coffee';
+const BUG_FROM = process.env.BUG_FROM || 'Synapse Grid Bugs <bugs@alluring.coffee>';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+// A 1080p PNG is ~2 MB, ~2.7 MB once base64'd. 8 MB leaves room for that plus the
+// log tail without letting one request exhaust a free-tier instance's memory.
+const BUG_MAX_BYTES = parseInt(process.env.BUG_MAX_BYTES || '8388608', 10);
+const BUG_RATE_MAX = parseInt(process.env.BUG_RATE_MAX || '5', 10);
+const BUG_RATE_WINDOW_MS = parseInt(process.env.BUG_RATE_WINDOW_MS || '600000', 10);
+
+// ip -> {n, start}. Pruned on every check, so a long-lived instance cannot
+// accumulate one entry per address that ever touched it.
+const bugRate = new Map();
+
+function bugRateAllows(ip) {
+	const now = Date.now();
+	for (const [k, v] of bugRate) if (now - v.start > BUG_RATE_WINDOW_MS) bugRate.delete(k);
+	const e = bugRate.get(ip);
+	if (!e) { bugRate.set(ip, { n: 1, start: now }); return true; }
+	if (now - e.start > BUG_RATE_WINDOW_MS) { bugRate.set(ip, { n: 1, start: now }); return true; }
+	e.n += 1;
+	return e.n <= BUG_RATE_MAX;
+}
+
+function readJsonBody(req, limit) {
+	return new Promise((resolve, reject) => {
+		let size = 0;
+		let over = false;
+		let chunks = [];
+		// ⚠ DO NOT req.destroy() ON OVERFLOW. That was the first version, and a live
+		// test found it: destroying the request kills the socket before the handler
+		// can write its 413, so a client that sent one oversized screenshot sees a
+		// connection reset with no status and no reason - and curl reported HTTP 100,
+		// because the socket died mid 100-continue. Instead: stop BUFFERING, keep
+		// draining so 'end' still fires and the 413 flushes, and only cut the
+		// connection if the sender keeps going well past the limit (which is no
+		// longer a memory question, since nothing is being kept).
+		req.on('data', (c) => {
+			size += c.length;
+			if (over) {
+				if (size > limit * 4) req.destroy();
+				return;
+			}
+			if (size > limit) {
+				over = true;
+				chunks = [];
+				reject(new Error('too_large'));
+				return;
+			}
+			chunks.push(c);
+		});
+		req.on('end', () => {
+			if (over) return;   // already rejected; resolving now would be ignored anyway
+			try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+			catch (e) { reject(new Error('bad_json')); }
+		});
+		req.on('error', () => reject(new Error('io')));
+	});
+}
+
+function bugSummary(b) {
+	// Every field the client sends, in a fixed order so two reports are diffable by
+	// eye. UNKNOWN KEYS ARE PRINTED TOO: the client is expected to grow new
+	// diagnostics, and a relay that silently dropped them would make the next
+	// diagnostic invisible for as long as nobody redeployed this file.
+	const known = ['message', 'build', 'flavour', 'scene', 'mission', 'when', 'platform',
+		'renderer', 'gpu', 'cpu', 'ram_mb', 'window', 'tier', 'reduced_motion',
+		'locale', 'playtime_s', 'tree_paused', 'time_scale', 'clock_latches', 'steam',
+		'mods_mounted', 'contact', 'log'];
+	const lines = [];
+	for (const k of known) {
+		if (b[k] === undefined || k === 'log' || k === 'message') continue;
+		lines.push(k + ': ' + String(b[k]).slice(0, 400));
+	}
+	for (const k of Object.keys(b)) {
+		if (known.includes(k) || k === 'shot_png_b64') continue;
+		lines.push(k + ': ' + String(b[k]).slice(0, 400));
+	}
+	let out = 'SYNAPSE GRID BUG REPORT\n=======================\n' + lines.join('\n');
+	out += '\n\n--- player message ---\n' + String(b.message || '(none)').slice(0, 20000);
+	if (b.log) out += '\n\n--- log tail ---\n' + String(b.log).slice(0, 60000);
+	return out;
+}
+
+async function emailBug(body, shotB64) {
+	if (!RESEND_API_KEY) return { emailed: false, why: 'no RESEND_API_KEY configured on the relay' };
+	const subject = ('[SG bug] ' + String(body.build || '?') + ' ' + String(body.scene || '')).slice(0, 180);
+	const payload = {
+		from: BUG_FROM,
+		to: [BUG_TO],
+		subject: subject,
+		text: bugSummary(body),
+	};
+	// reply_to ONLY when the player volunteered an address and it looks like one: a
+	// malformed value makes the provider reject the whole send, which would lose a
+	// report over an optional field.
+	if (typeof body.contact === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.contact)) {
+		payload.reply_to = body.contact;
+	}
+	if (shotB64) payload.attachments = [{ filename: 'shot.png', content: shotB64 }];
+	try {
+		const r = await fetch('https://api.resend.com/emails', {
+			method: 'POST',
+			headers: { 'Authorization': 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
+		});
+		if (!r.ok) {
+			const t = await r.text().catch(() => '');
+			// Never log the key; the provider echoes only the request it saw.
+			log('bug email failed ' + r.status + ': ' + t.slice(0, 300));
+			return { emailed: false, why: 'mail provider returned ' + r.status };
+		}
+		return { emailed: true };
+	} catch (e) {
+		log('bug email threw: ' + (e && e.message));
+		return { emailed: false, why: 'mail provider unreachable' };
+	}
+}
+
+async function handleBugPost(req, res) {
+	const fwd = String(req.headers['x-forwarded-for'] || '');
+	const ip = fwd.split(',')[0].trim() || req.socket.remoteAddress || '?';
+	if (!bugRateAllows(ip)) {
+		res.writeHead(429, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+		return;
+	}
+	let body;
+	try {
+		body = await readJsonBody(req, BUG_MAX_BYTES);
+	} catch (e) {
+		const code = e.message === 'too_large' ? 413 : 400;
+		// The socket may already be gone (the 4x drain guard, or a client that hung
+		// up); writing to a destroyed response throws and would surface as a 500 for
+		// what is really a clean refusal.
+		if (!res.writableEnded && !res.headersSent) {
+			try {
+				res.writeHead(code, { 'Content-Type': 'application/json' });
+				res.end(JSON.stringify({ ok: false, error: e.message }));
+			} catch (_) { /* client vanished mid-refusal; nothing to report to */ }
+		}
+		return;
+	}
+	if (!body || typeof body !== 'object') {
+		res.writeHead(400, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ ok: false, error: 'bad_body' }));
+		return;
+	}
+	const shot = typeof body.shot_png_b64 === 'string' ? body.shot_png_b64 : '';
+	// ALWAYS log the report, key or no key. Render and Fly both keep stdout, so a
+	// misconfigured mailer degrades to "the report is in the logs" rather than to a
+	// report that never existed.
+	log('bug report from ' + ip + ' build=' + body.build + ' scene=' + body.scene + ' shot=' + shot.length + ' b64 bytes');
+	log(bugSummary(body));
+	const out = await emailBug(body, shot);
+	res.writeHead(out.emailed ? 200 : 202, { 'Content-Type': 'application/json' });
+	res.end(JSON.stringify(Object.assign({ ok: true, to: BUG_TO }, out)));
+}
+
 // ---- HTTP server (health check + WS upgrade target) -----------------------
 // A plain 200 on "/" so platform health checks (Fly/Render/Railway) pass and
 // you can eyeball "it's alive" in a browser. WS upgrade is handled by ws below.
 const httpServer = http.createServer((req, res) => {
+	if (req.method === 'POST' && req.url === '/bug') {
+		// handleBugPost owns the response on every path including its own failures,
+		// so a rejection reaching here can only be a bug in this file - answer 500
+		// rather than leaving the client hanging until its timeout.
+		handleBugPost(req, res).catch((e) => {
+			log('bug handler threw: ' + (e && e.message));
+			if (!res.headersSent) { res.writeHead(500, { 'Content-Type': 'application/json' }); }
+			res.end(JSON.stringify({ ok: false, error: 'server_error' }));
+		});
+		return;
+	}
 	if (req.url === '/health' || req.url === '/') {
 		res.writeHead(200, { 'Content-Type': 'text/plain' });
 		res.end(`Synapse Grid relay OK — rooms: ${rooms.size}\n`);
