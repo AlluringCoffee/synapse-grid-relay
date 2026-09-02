@@ -150,6 +150,9 @@ function broadcastLobby(room) {
 const BUG_TO = process.env.BUG_TO || 'bugs@alluring.coffee';
 const BUG_FROM = process.env.BUG_FROM || 'Synapse Grid Bugs <bugs@alluring.coffee>';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+// The provider endpoint. Overridable ONLY so the test suite can stand a local mock in its place
+// (tests/signaling_server.integration.test.js); a deployment never sets it.
+const RESEND_API_URL = process.env.RESEND_API_URL || 'https://api.resend.com/emails';
 // A 1080p PNG is ~2 MB, ~2.7 MB once base64'd. 8 MB leaves room for that plus the
 // log tail without letting one request exhaust a free-tier instance's memory.
 const BUG_MAX_BYTES = parseInt(process.env.BUG_MAX_BYTES || '8388608', 10);
@@ -247,7 +250,7 @@ async function emailBug(body, shotB64) {
 	}
 	if (shotB64) payload.attachments = [{ filename: 'shot.png', content: shotB64 }];
 	try {
-		const r = await fetch('https://api.resend.com/emails', {
+		const r = await fetch(RESEND_API_URL, {
 			method: 'POST',
 			headers: { 'Authorization': 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json' },
 			body: JSON.stringify(payload),
@@ -459,7 +462,7 @@ function handleDisconnect(ws) {
 // ---- Heartbeat: drop dead sockets so rooms don't leak ghost peers ----------
 // Send a ping every HEARTBEAT_MS. Any socket that hasn't replied (alive flag
 // not refreshed by a pong) since the last beat is terminated.
-const heartbeat = setInterval(() => {
+function heartbeatTick() {
 	for (const ws of wss.clients) {
 		if (ws.alive === false) {
 			log(`terminating unresponsive peer ${ws.peerId} (room ${ws.roomCode})`);
@@ -469,24 +472,52 @@ const heartbeat = setInterval(() => {
 		ws.alive = false;
 		send(ws, { t: 'ping' });
 	}
-}, HEARTBEAT_MS);
+}
+let heartbeat = null;
 
-wss.on('close', () => clearInterval(heartbeat));
+// BACKLOG 1.15 (2026-09-02): the process used to listen at module load, which made the file
+// untestable without spawning it. start() is the same listen + heartbeat, called at the bottom
+// only when this file IS the program (`node signaling_server.js`); a test requires the module,
+// calls start(0) for an OS-assigned port, and stop() to let the process exit.
+function start(port, onListening) {
+	heartbeat = setInterval(heartbeatTick, HEARTBEAT_MS);
+	wss.once('close', () => clearInterval(heartbeat));
+	httpServer.listen(port, () => {
+		const actual = httpServer.address().port;
+		log(`Synapse Grid relay listening on :${actual} (max room ${MAX_ROOM_SIZE})`);
+		if (onListening) onListening(actual);
+	});
+	return httpServer;
+}
 
-httpServer.listen(PORT, () => {
-	log(`Synapse Grid relay listening on :${PORT} (max room ${MAX_ROOM_SIZE})`);
-});
+function stop(done) {
+	if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+	for (const ws of wss.clients) ws.terminate();
+	for (const room of rooms.values()) if (room.deleteTimer) clearTimeout(room.deleteTimer);
+	rooms.clear();
+	httpServer.close(() => { if (done) done(); });
+}
 
 // Clean shutdown on SIGTERM/SIGINT (platforms send SIGTERM on redeploy).
 function shutdown(sig) {
 	log(`${sig} received, closing...`);
-	clearInterval(heartbeat);
+	if (heartbeat) clearInterval(heartbeat);
 	for (const ws of wss.clients) ws.close(1001, 'server shutting down');
 	httpServer.close(() => process.exit(0));
 	setTimeout(() => process.exit(0), 3000).unref(); // hard exit if sockets hang
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+if (require.main === module) {
+	process.on('SIGTERM', () => shutdown('SIGTERM'));
+	process.on('SIGINT', () => shutdown('SIGINT'));
+	start(PORT);
+}
+
+// Test seam (BACKLOG 1.15): the pure pieces and the lifecycle, nothing a deployment calls.
+module.exports = {
+	start, stop, heartbeatTick,
+	electHost, bugRateAllows, bugSummary, readJsonBody, bugRate, rooms,
+	BUG_TO, BUG_MAX_BYTES, BUG_RATE_MAX, MAX_ROOM_SIZE, ROOM_CODE_RE,
+};
 
 
 // --- b43 WORLD LADDER -----------------------------------------------------------------------------

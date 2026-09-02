@@ -4,7 +4,8 @@
   "description": "Signaling + WebSocket relay server for Synapse Grid online multiplayer. Matches two phones by room code, exchanges a device-power benchmark to elect the host, and relays game packets between peers through NAT.",
   "main": "signaling_server.js",
   "scripts": {
-    "start": "node signaling_server.js"
+    "start": "node signaling_server.js",
+    "test": "node --test ../tests/signaling_server.unit.test.js ../tests/signaling_server.integration.test.js"
   },
   "engines": {
     "node": ">=18"

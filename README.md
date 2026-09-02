@@ -186,6 +186,24 @@ A `render.yaml` is included so you can also use Render's *Blueprint* flow
 
 ---
 
+## Tests
+
+```
+cd server
+npm install        # once: the relay's one dependency (ws)
+npm test           # node --test -- Node >= 18, no other tooling
+```
+
+`tests/signaling_server.unit.test.js` covers the pure pieces (host election and its tiebreak, the room-code
+shape, the per-ip rate window, the bug-report summary's field order and caps, the body reader's bad-JSON /
+overflow / drain behaviour). `tests/signaling_server.integration.test.js` spawns the real process per
+scenario on an OS-assigned port and drives it over real HTTP and WebSockets: `/health`, `POST /bug` 400 /
+413 (plain and `Expect: 100-continue`) / 429 / 202 without a key / 200 against a mocked provider (bearer
+auth, to/from/subject, reply_to rules, the screenshot attachment) / 202 on a failing or unreachable
+provider, the full join -> election -> relay -> leave handshake, every in-band error, and the heartbeat
+terminating a silent peer. The provider URL is overridable only through `RESEND_API_URL`, which exists for
+that mock and nothing else.
+
 ## Files in this folder
 
 | File                  | Purpose                                                      |
