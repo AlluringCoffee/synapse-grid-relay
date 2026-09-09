@@ -1,0 +1,26 @@
+[Unit]
+Description=Synapse Grid ALWAYS-ON PARTNER (headless Steam PvP host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=steam
+Group=steam
+EnvironmentFile=-/etc/synapse-partner.env
+WorkingDirectory=__INSTALL_DIR__
+# xvfb-run gives the Steam client (required for GodotSteam to talk to a logged-in account) a virtual
+# display to draw its own hidden windows on; -silent keeps the Steam client's own UI from trying to
+# front itself. The game binary itself runs --headless (no renderer) regardless.
+ExecStartPre=/usr/bin/pkill -u %i -f steam.sh || true
+ExecStart=/usr/bin/xvfb-run -a --server-args="-screen 0 1024x768x24" \
+    __INSTALL_DIR__/synapse_grid.x86_64 --headless -- --partner-bot
+Restart=always
+RestartSec=10
+# A wedged Steam handshake is worse than a crash -- kill and restart rather than hang forever.
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
