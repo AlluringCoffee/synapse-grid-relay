@@ -5,7 +5,11 @@ services:
   - type: web
     name: synapse-grid-relay
     runtime: node
-    rootDir: server
+    # No rootDir: Render deploys from github.com/AlluringCoffee/synapse-grid-relay, which is this
+    # server/ folder split to the ROOT of its own repo (git subtree split -P server) because the
+    # main repo cannot be pushed (a 132 MB mp4 in history). With rootDir: server that repo has no
+    # such folder and the build fails. 2026-09-12: the deployed relay was the June upload (no /bug
+    # route -> every player bug report got HTTP 404) until this split was pushed.
     plan: free            # change to "starter" (paid) to avoid free-tier sleep
     buildCommand: npm install
     startCommand: npm start
